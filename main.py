@@ -1,18 +1,30 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
 from jose import jwt
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
 SECRET_KEY = "mysecretkey123"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 def create_token(data: dict):
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     data.update({"exp": expire})
     token = jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
     return token
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if username is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return username
+    except:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -41,23 +53,23 @@ def register(user: User):
     return {"message": "User registered successfully", "username": user.username}
 
 @app.post("/login")
-def login (user: User):
-    conn=sqlite3.connect("users.db")
+def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT username, password FROM users where username = ?", (user.username, ))
+    cursor.execute("SELECT username, password FROM users WHERE username = ?", (form_data.username,))
     current_user = cursor.fetchone()
-
     if current_user is None:
-        raise HTTPException(status_code = 401, detail = "user not found")
+        raise HTTPException(status_code=401, detail="User not found")
     hashed = current_user[1]
-    if not pwd_context.verify(user.password, hashed):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid password"
-        )
-
+    if not pwd_context.verify(form_data.password, hashed):
+        raise HTTPException(status_code=401, detail="Invalid password")
     data = {"sub": current_user[0]}
     token = create_token(data)
-    return {"access_token": token}
+    return {"access_token": token, "token_type": "bearer"}
+
+
+@app.get("/me")
+def get_me(current_user: str = Depends(get_current_user)):
+    return {"username": current_user}
 
 
